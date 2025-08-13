@@ -34,7 +34,7 @@ MAX_RETRY_ATTEMPTS = 3
 # =================================================================
 PROJECT_ID = 'advertentiedata-bol-ds'
 DATASET_ID = 'DATASET_BOL_ADVERTENTIES_DS'
-TABLE_ID = 'ORDERDATA_BOL_DS_TEST'
+TABLE_ID = 'ORDERDATA_BOL_DS'
 
 # Haal de service account info op uit een omgevingsvariabele (GitHub Secret)
 SERVICE_ACCOUNT_INFO = json.loads(os.environ.get('GCP_SA_KEY'))
@@ -292,4 +292,5 @@ if __name__ == "__main__":
     print("\n=================================================================")
     print("                 Script voltooid")
     print(f"  Totaal duur: {minuten} minuut(en) en {seconden} seconde(n)")
+
     print("=================================================================")
