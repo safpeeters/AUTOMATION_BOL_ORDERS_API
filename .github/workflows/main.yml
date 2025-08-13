@@ -1,0 +1,41 @@
+name: Sync Bol.com Orders to BigQuery
+
+on:
+  schedule:
+    # Draai elke dag om 03:00 UTC. 
+    # Dit is doorgaans rond 05:00-06:00 in Nederland, afhankelijk van zomer- of wintertijd.
+    - cron: '0 3 * * *'
+  # Dit maakt het mogelijk de workflow handmatig te starten vanuit de GitHub Actions-interface.
+  workflow_dispatch:
+
+jobs:
+  run-daily-sync:
+    # De job draait op een virtuele machine met Ubuntu.
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Stap 1: Checkout de code van je repository.
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Stap 2: Configureer de Python-omgeving.
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.x'
+
+      # Stap 3: Installeer de Python-bibliotheken die je script nodig heeft.
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas pandas-gbq google-cloud-bigquery
+          
+      # Stap 4: Voer het Python-script uit.
+      - name: Run Python script
+        # Geef de environment variables door via GitHub Secrets voor veilige toegang.
+        env:
+          BOL_CLIENT_ID: ${{ secrets.BOL_CLIENT_ID }}
+          BOL_CLIENT_SECRET: ${{ secrets.BOL_CLIENT_SECRET }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          python Orderdata_Bol_API_BigQuery_Automation.py
