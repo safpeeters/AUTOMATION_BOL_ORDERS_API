@@ -2,9 +2,9 @@ name: Sync Bol.com Orders to BigQuery
 
 on:
   schedule:
-    # Draai elke dag om 03:00 UTC. 
-    # Dit is doorgaans rond 05:00-06:00 in Nederland, afhankelijk van zomer- of wintertijd.
-    - cron: '0 3 * * *'
+    # Draai elke dag om 02:00 UTC. 
+    # Dit is doorgaans rond 04:00-06:00 in Nederland, afhankelijk van zomer- of wintertijd.
+    - cron: '0 2 * * *'
   # Dit maakt het mogelijk de workflow handmatig te starten vanuit de GitHub Actions-interface.
   workflow_dispatch:
 
