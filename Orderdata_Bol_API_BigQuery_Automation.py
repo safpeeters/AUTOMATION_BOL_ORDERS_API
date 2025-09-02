@@ -33,7 +33,6 @@ MAX_RETRY_ATTEMPTS = 3
 # BELANGRIJK: De unitPrice van de Bol.com API is inclusief BTW.
 # De API geeft het btw-tarief niet mee, dus we moeten een aanname maken.
 # In dit voorbeeld gebruiken we het hoge tarief van 21%.
-# Pas dit aan als je een andere methode gebruikt.
 BTW_TARIEF = 0.21
 
 # =================================================================
@@ -235,7 +234,7 @@ def push_data_to_bigquery(df, project_id, dataset_id, table_id, service_account_
 # Hoofdverwerking
 # =================================================================
 def verwerk_orders_per_dag(datum):
-    """Verwerkt orders van een bepaalde dag en haalt de details op."""
+    """Verwerkt alle orders van een bepaalde dag en haalt de details op."""
     order_ids_op_datum = krijg_alle_orders_van_dag(datum)
 
     if not order_ids_op_datum:
@@ -250,25 +249,24 @@ def verwerk_orders_per_dag(datum):
         if order_details and 'orderItems' in order_details:
             order_datum_tijd = order_details.get('orderPlacedDateTime')
             for item in order_details['orderItems']:
-                # Filter geannuleerde orders eruit
-                if item.get('cancellationRequest') is None:
-                    product_details = item.get('product', {})
-                    ean = product_details.get('ean')
-                    eenheidsprijs_incl_btw = item.get('unitPrice')
-                    
-                    # Bereken de prijs exclusief btw en overschrijf de oorspronkelijke variabele.
-                    eenheidsprijs_excl_btw = eenheidsprijs_incl_btw / (1 + BTW_TARIEF)
+                product_details = item.get('product', {})
+                ean = product_details.get('ean')
+                eenheidsprijs_incl_btw = item.get('unitPrice')
+                
+                # Bereken de prijs exclusief btw
+                eenheidsprijs_excl_btw = eenheidsprijs_incl_btw / (1 + BTW_TARIEF)
 
-                    order_details_lijst.append({
-                        "Order ID": order_id,
-                        "Order Datum": order_datum_tijd,
-                        "EAN": ean,
-                        "Aantal": item.get('quantity'),
-                        # De Eenheidsprijs wordt hier de prijs exclusief BTW.
-                        "Eenheidsprijs": eenheidsprijs_excl_btw
-                    })
-                else:
-                    print(f"[INFO] Orderitem voor order {order_id} is geannuleerd en wordt overgeslagen.")
+                # Controleer of het orderitem een annuleringsverzoek heeft
+                is_geannuleerd = bool(item.get('cancellationRequest'))
+
+                order_details_lijst.append({
+                    "Order ID": order_id,
+                    "Order Datum": order_datum_tijd,
+                    "EAN": ean,
+                    "Aantal": item.get('quantity'),
+                    "Eenheidsprijs": eenheidsprijs_excl_btw,
+                    "Is Geannuleerd": is_geannuleerd
+                })
 
     if order_details_lijst:
         df = pd.DataFrame(order_details_lijst)
