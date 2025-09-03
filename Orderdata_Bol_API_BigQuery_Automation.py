@@ -7,13 +7,12 @@ from google.cloud import bigquery
 from google.oauth2 import service_account
 
 # --- Configuratie ---
-# Zorg ervoor dat deze omgevingsvariabelen zijn ingesteld of vul ze direct in
+# Haal de API-sleutels op uit omgevingsvariabelen
 CLIENT_ID = os.getenv('BOL_CLIENT_ID')
 CLIENT_SECRET = os.getenv('BOL_CLIENT_SECRET')
 
-# De datum waarvoor je de orders wilt ophalen (voor deze run)
+# De datum waarvoor de orders worden opgehaald. Standaard de dag van gisteren.
 PROCESSING_DATE = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-# PROCESSING_DATE = '2025-09-02' # Je kunt een specifieke datum instellen voor testen
 
 # BigQuery configuratie
 BIGQUERY_PROJECT_ID = 'advertentiedata-bol-ds'
@@ -51,6 +50,10 @@ def get_bol_token():
     }
     try:
         response = requests.post(bol_token_url, headers=headers, json=data)
+        
+        # --- DEBUG-regel toegevoegd om de ruwe respons te inspecteren ---
+        print(f"[DEBUG] Raw response from Bol.com: {response.text}")
+        
         response.raise_for_status()
         token_info = response.json()
         print("Succes: Bol.com toegangstoken ontvangen.")
@@ -120,7 +123,6 @@ def format_data_for_bigquery(orders):
             "orderPlacedDateTime": order.get("orderPlacedDateTime"),
             "orderItems": [],
             "customerDetails": order.get("customerDetails"),
-            # Nieuwe velden of velden die aangepast moeten worden
             "isGeannuleerd": order.get("orderItems")[0].get("cancellationRequest"),
         }
         
@@ -164,13 +166,12 @@ def check_and_update_schema(client, table_ref):
 def push_to_bigquery(rows):
     """Pusht de gegevens naar BigQuery met de 'append' optie."""
     print("Start: Gegevens naar BigQuery pushen met 'append' optie...")
-    table = bigquery_client.get_table(table_ref)
     
     # Wees zeker van het schema
     if not check_and_update_schema(bigquery_client, table_ref):
         return
-        
-    errors = bigquery_client.insert_rows_json(table, rows)
+    
+    errors = bigquery_client.insert_rows_json(table_ref, rows)
 
     if errors == []:
         print("Succes: Gegevens succesvol naar BigQuery gepusht.")
