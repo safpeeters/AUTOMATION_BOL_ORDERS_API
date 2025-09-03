@@ -1,214 +1,169 @@
-import os
 import requests
-import json
-from datetime import datetime, timedelta
+import base64
 import time
-from google.cloud import bigquery
+import pandas as pd
+import os
+from datetime import datetime, timedelta
 from google.oauth2 import service_account
+import pandas_gbq
+import json
 
-# --- Configuration and Secrets ---
-# Use environment variables for all secrets
+# =================================================================
+# Configuratie Bol.com Retailer API
+# =================================================================
+# Haal de client ID en client secret op uit de omgevingsvariabelen (GitHub Secrets)
 CLIENT_ID = os.environ.get('BOL_CLIENT_ID')
 CLIENT_SECRET = os.environ.get('BOL_CLIENT_SECRET')
 
-# BigQuery configuration
-BIGQUERY_PROJECT_ID = 'advertentiedata-bol-ds'
-BIGQUERY_DATASET_ID = 'DATASET_BOL_ADVERTENTIES_DS'
-BIGQUERY_TABLE_ID = 'ORDERDATA_BOL_DS'
+API_BASE_URL = 'https://api.bol.com/retailer'
+TOKEN_URL = 'https://login.bol.com/token'
 
-# The date for which to fetch orders (e.g., yesterday's date)
-PROCESSING_DATE = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+# =================================================================
+# Globale configuratie
+# =================================================================
+MAX_PAGINA = 1000
+PAGE_SIZE = 50
 
-# --- Initialization ---
-BOL_API_URL = 'https://api.bol.com/retailer/orders'
-BOL_TOKEN_URL = 'https://login.bol.com/token'
+# --- RATE LIMIT CONFIGURATIE ---
+SLEEP_TIME_ORDERS = 60 / 20
+SLEEP_TIME_ORDER_DETAILS = 1 / 24
+MAX_RETRY_ATTEMPTS = 3
 
-def get_bigquery_client():
-    """Initializes and returns a BigQuery client using a service account key from an environment variable."""
-    try:
-        # Get the service account key from the environment variable (GitHub Secret)
-        service_account_info = json.loads(os.environ.get('GCP_SA_KEY'))
-        credentials = service_account.Credentials.from_service_account_info(service_account_info)
-        print("Success: BigQuery client initialized.")
-        return bigquery.Client(credentials=credentials, project=BIGQUERY_PROJECT_ID)
-    except Exception as e:
-        print(f"[CRITICAL ERROR] Failed to initialize BigQuery client: {e}")
-        return None
+# =================================================================
+# Configuratie Google BigQuery
+# =================================================================
+PROJECT_ID = 'advertentiedata-bol-ds'
+DATASET_ID = 'DATASET_BOL_ADVERTENTIES_DS'
+TABLE_ID = 'ORDERDATA_BOL_DS'
 
-def get_bol_token():
-    """Fetches a Bol.com OAuth2 token."""
-    print("Starting: Fetching Bol.com authentication token...")
-    if not CLIENT_ID or not CLIENT_SECRET:
-        print("[ERROR] BOL_CLIENT_ID or BOL_CLIENT_SECRET not set in environment variables.")
-        return None
+# Haal de service account info op uit een omgevingsvariabele (GitHub Secret)
+SERVICE_ACCOUNT_INFO = json.loads(os.environ.get('GCP_SA_KEY'))
 
-    headers = {'Content-Type': 'application/json'}
-    data = {
-        'client_id': CLIENT_ID,
-        'client_secret': CLIENT_SECRET,
-        'grant_type': 'client_credentials'
+# Globale variabele voor het opslaan van het token en de vervaltijd
+bol_toegangstoken = None
+token_verloopt_om = datetime.now()
+
+# =================================================================
+# Bol.com API authenticatie
+# =================================================================
+def krijg_bol_toegangstoken():
+    """Haalt het Bol.com authenticatie token op en slaat het op met vervaltijd."""
+    global bol_toegangstoken, token_verloopt_om
+
+    print("Start: Bol.com authenticatie token ophalen...")
+    auth_string = f'{CLIENT_ID}:{CLIENT_SECRET}'
+    encoded_auth_string = base64.b64encode(auth_string.encode()).decode()
+
+    headers = {
+        'Authorization': f'Basic {encoded_auth_string}',
+        'Accept': 'application/vnd.retailer.v10+json'
     }
+    data = {'grant_type': 'client_credentials'}
+
     try:
-        response = requests.post(BOL_TOKEN_URL, headers=headers, json=data)
+        response = requests.post(TOKEN_URL, headers=headers, data=data)
         response.raise_for_status()
-        token_info = response.json()
-        print("Success: Bol.com access token received.")
-        return token_info.get('access_token')
-    except requests.exceptions.RequestException as err:
-        print(f"[ERROR] Error during Bol.com token request: {err}")
+
+        response_json = response.json()
+        access_token = response_json.get('access_token')
+        expires_in = response_json.get('expires_in', 0)
+
+        if access_token:
+            print("Succes: Bol.com toegangstoken ontvangen.")
+            bol_toegangstoken = access_token
+            # Sla de vervaltijd op, met een kleine marge van 60 seconden
+            token_verloopt_om = datetime.now() + timedelta(seconds=expires_in - 60)
+            return bol_toegangstoken
+        else:
+            print("[FOUT] Geen toegangstoken ontvangen.")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"[FOUT] Fout bij het ophalen van het Bol.com toegangstoken: {e}")
         return None
 
-def fetch_orders(token, date):
-    """Fetches all orders for a specific date with pagination."""
-    print(f"--- Processing started for date: {date} ---")
-    print(f"Starting: Fetching orders for date: {date}...")
-    all_orders = []
+
+def check_en_vernieuwt_token():
+    """Controleert of het token nog geldig is en vernieuwt het indien nodig."""
+    global bol_toegangstoken, token_verloopt_om
+    if bol_toegangstoken is None or datetime.now() >= token_verloopt_om:
+        print("Token is verlopen of niet aanwezig. Vernieuwen...")
+        return krijg_bol_toegangstoken()
+    return bol_toegangstoken
+
+
+# =================================================================
+# Orders ophalen
+# =================================================================
+def maak_api_call_met_retry(method, url, headers, params=None, data=None):
+    """Maakt een API-aanroep en probeert het opnieuw bij een 429-fout."""
+    for attempt in range(MAX_RETRY_ATTEMPTS):
+        try:
+            if method == 'GET':
+                response = requests.get(url, headers=headers, params=params)
+            else:
+                response = requests.post(url, headers=headers, data=data)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 429:
+                wait_time = (attempt + 1) * 60
+                print(
+                    f"[WAARSCHUWING] Rate limit overschreden (429). Wacht {wait_time} seconden. Poging {attempt + 1} van {MAX_RETRY_ATTEMPTS}.")
+                time.sleep(wait_time)
+            elif e.response.status_code == 401:
+                # Als het token niet meer geldig is, proberen we het te vernieuwen en de aanroep opnieuw te doen
+                print("[WAARSCHUWING] 401 Unauthorized. Token wordt vernieuwd en aanroep wordt opnieuw geprobeerd.")
+                check_en_vernieuwt_token()
+                headers['Authorization'] = f'Bearer {bol_toegangstoken}'
+                continue
+            else:
+                raise e
+    raise requests.exceptions.RequestException(f"API-aanroep mislukt na {MAX_RETRY_ATTEMPTS} pogingen.")
+
+
+def krijg_alle_orders_van_dag(datum):
+    """Haalt alle orders op die zijn gewijzigd op een specifieke datum."""
+    print(f"Start: Orders ophalen voor datum: {datum}...")
+    orders_url = f'{API_BASE_URL}/orders'
+    alle_orders = []
     page = 1
-    page_size = 50
-    max_retries = 3
+
+    token = check_en_vernieuwt_token()
+    if not token:
+        print("[KRITIEKE FOUT] Geen geldig Bol.com toegangstoken beschikbaar.")
+        return None
+
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Accept': 'application/vnd.retailer.v10+json'
+    }
+
+    try:
+        datetime.strptime(datum, "%Y-%m-%d")
+    except ValueError:
+        print(f"[FOUT] Ongeldig datumformaat: {datum}. Gebruik 'YYYY-MM-DD'.")
+        return None
 
     while True:
-        url = f"{BOL_API_URL}?latest-change-date={date}&fulfilment-method=ALL&status=ALL&page={page}&page-size={page_size}"
-        headers = {
-            'Authorization': f'Bearer {token}',
-            'Accept': 'application/vnd.retailer.v9+json',
+        params = {
+            'latest-change-date': datum,
+            'fulfilment-method': 'ALL',
+            'status': 'ALL',
+            'page': page,
+            'page-size': PAGE_SIZE
         }
 
-        try:
-            print(f"[DEBUG] API call URL: {url}")
-            response = requests.get(url, headers=headers)
-            
-            if response.status_code == 429:
-                if max_retries > 0:
-                    wait_time = 60
-                    print(f"[WARNING] Rate limit exceeded (429). Waiting {wait_time} seconds. Retrying...")
-                    time.sleep(wait_time)
-                    max_retries -= 1
-                    continue
-                else:
-                    print(f"[CRITICAL ERROR] Rate limit exceeded after multiple retries. Script will stop.")
-                    return None
-            
-            response.raise_for_status()
-            data = response.json()
+        print(f"[DEBUG] URL van aanroep: {requests.Request('GET', orders_url, params=params).prepare().url}")
 
-            orders = data.get('orders', [])
-            if not orders:
-                print(f"No more orders found on page {page}. Pagination complete.")
+        try:
+            response = maak_api_call_met_retry('GET', orders_url, headers, params=params)
+            response_json = response.json()
+            orders = response_json.get('orders', [])
+            for order in orders:
+                alle_orders.append(order.get('orderId'))
+
+            if len(orders) < PAGE_SIZE or page >= MAX_PAGINA:
                 break
 
-            all_orders.extend(orders)
             page += 1
-            # Add a small delay between requests to be polite to the API
-            time.sleep(1)
-        
-        except requests.exceptions.RequestException as e:
-            print(f"[ERROR] Error fetching orders: {e}")
-            return None
-
-    print(f"A total of {len(all_orders)} order(s) fetched for {date}.")
-    return all_orders
-
-def format_data_for_bigquery(orders):
-    """Translates Bol.com API data into a BigQuery-friendly format."""
-    rows = []
-    for order in orders:
-        # Simplified and validated data extraction
-        for item in order.get("orderItems", []):
-            is_cancelled = item.get("cancellationRequest", {}).get("isRequested", False)
-            
-            # Combine order and item data into a single row
-            row = {
-                "orderId": order.get("orderId"),
-                "orderPlacedDateTime": order.get("orderPlacedDateTime"),
-                "orderItemId": item.get("orderItemId"),
-                "ean": item.get("ean"),
-                "fulfilment": item.get("fulfilment"),
-                "quantity": item.get("quantity"),
-                "unitPrice": item.get("unitPrice"),
-                "isGeannuleerd": is_cancelled,
-                # Flatten customer data if needed, otherwise it's better to store as a JSON string or a nested field
-                "customerDetails_email": order.get("customerDetails", {}).get("shipmentDetails", {}).get("email")
-            }
-            rows.append(row)
-    return rows
-
-def check_and_update_schema(client, table_ref):
-    """Checks and updates the BigQuery schema for the 'isGeannuleerd' column."""
-    try:
-        table = client.get_table(table_ref)
-        current_schema = table.schema
-        
-        new_field = bigquery.SchemaField('isGeannuleerd', 'BOOL', mode='NULLABLE')
-        field_exists = any(field.name == new_field.name for field in current_schema)
-
-        if not field_exists:
-            print(f"[INFO] Field '{new_field.name}' does not exist, adding to schema.")
-            new_schema = list(current_schema)
-            new_schema.append(new_field)
-            table.schema = new_schema
-            client.update_table(table, ['schema'])
-            print(f"[INFO] Field '{new_field.name}' successfully added to the table.")
-        else:
-            print(f"[INFO] Field '{new_field.name}' already exists in the schema. No action needed.")
-    except Exception as e:
-        print(f"[CRITICAL ERROR] Error checking or updating schema: {e}")
-        return False
-    return True
-
-def push_to_bigquery(rows, bigquery_client):
-    """Pushes data to BigQuery using the 'append' option."""
-    print("Starting: Pushing data to BigQuery...")
-    table_ref = bigquery_client.dataset(BIGQUERY_DATASET_ID).table(BIGQUERY_TABLE_ID)
-
-    if not check_and_update_schema(bigquery_client, table_ref):
-        return
-
-    # Check if there are rows to insert
-    if not rows:
-        print("No rows to insert. Skipping BigQuery push.")
-        return
-
-    try:
-        errors = bigquery_client.insert_rows_json(table_ref, rows)
-
-        if not errors:
-            print(f"Success: Successfully pushed {len(rows)} rows to BigQuery.")
-        else:
-            print(f"[CRITICAL ERROR] Error pushing data to BigQuery: {errors}")
-    except Exception as e:
-        print(f"[CRITICAL ERROR] An unexpected error occurred during BigQuery insertion: {e}")
-
-def main():
-    """Main function of the script."""
-    start_time = time.time()
-    
-    bol_token = get_bol_token()
-    if not bol_token:
-        print("Script stopped due to a token retrieval error.")
-        return
-
-    orders = fetch_orders(bol_token, PROCESSING_DATE)
-    if not orders:
-        print("No orders retrieved. Script completed with no further action.")
-        return
-
-    # Initialize BigQuery client only after successful token retrieval
-    bigquery_client = get_bigquery_client()
-    if not bigquery_client:
-        return
-
-    rows_to_insert = format_data_for_bigquery(orders)
-    push_to_bigquery(rows_to_insert, bigquery_client)
-
-    end_time = time.time()
-    duration = end_time - start_time
-    minutes, seconds = divmod(duration, 60)
-
-    print("\n" + "="*50)
-    print(" " * 15 + "Script Complete")
-    print(f"  Total Duration: {int(minutes)} minute(s) and {int(seconds)} second(s)")
-    print("="*50)
-
-if __name__ == "__main__":
-    main()
+            time.sleep
