@@ -12,7 +12,6 @@ CLIENT_ID = os.getenv('BOL_CLIENT_ID')
 CLIENT_SECRET = os.getenv('BOL_CLIENT_SECRET')
 
 # De datum waarvoor je de orders wilt ophalen (voor deze run)
-# De datum in je output was 2025-09-02, maar je zou hier de huidige datum kunnen gebruiken
 PROCESSING_DATE = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 # PROCESSING_DATE = '2025-09-02' # Je kunt een specifieke datum instellen voor testen
 
@@ -20,7 +19,13 @@ PROCESSING_DATE = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
 BIGQUERY_PROJECT_ID = 'advertentiedata-bol-ds'
 BIGQUERY_DATASET_ID = 'DATASET_BOL_ADVERTENTIES_DS'
 BIGQUERY_TABLE_ID = 'ORDERDATA_BOL_DS'
-BIGQUERY_CREDENTIALS_PATH = 'path/naar/je/service_account_file.json' # Pas dit aan!
+
+# Haal de service account info op uit een omgevingsvariabele (GitHub Secret)
+try:
+    SERVICE_ACCOUNT_INFO = json.loads(os.environ.get('GCP_SA_KEY'))
+except (json.JSONDecodeError, TypeError) as e:
+    print(f"[KRITIEKE FOUT] Fout bij het laden van GCP_SA_KEY omgevingsvariabele: {e}")
+    exit()
 
 # --- Initialisatie ---
 bol_api_url = 'https://api.bol.com/retailer/orders'
@@ -28,11 +33,11 @@ bol_token_url = 'https://login.bol.com/token'
 
 # BigQuery client
 try:
-    credentials = service_account.Credentials.from_service_account_file(BIGQUERY_CREDENTIALS_PATH)
+    credentials = service_account.Credentials.from_service_account_info(SERVICE_ACCOUNT_INFO)
     bigquery_client = bigquery.Client(credentials=credentials, project=BIGQUERY_PROJECT_ID)
     table_ref = bigquery_client.dataset(BIGQUERY_DATASET_ID).table(BIGQUERY_TABLE_ID)
 except Exception as e:
-    print(f"[KRITIEKE FOUT] Kan BigQuery-client niet initialiseren: {e}")
+    print(f"[KRITIEKE FOUT] Kan BigQuery-client niet initialiseren met de verstrekte referenties: {e}")
     exit()
 
 def get_bol_token():
