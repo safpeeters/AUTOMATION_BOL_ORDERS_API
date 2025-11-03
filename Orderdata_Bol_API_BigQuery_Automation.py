@@ -302,3 +302,4 @@ if __name__ == "__main__":
     print("                 Script voltooid")
     print(f"  Totaal duur: {minuten} minuut(en) en {seconden} seconde(n)")
     print("=================================================================")
+
