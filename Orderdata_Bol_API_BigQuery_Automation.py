@@ -10,7 +10,6 @@ import json
 
 # =================================================================
 # Configuratie Bol.com Retailer API
-# (Ongewijzigd)
 # =================================================================
 # Haal de client ID en client secret op uit de omgevingsvariabelen (GitHub Secrets)
 CLIENT_ID = os.environ.get('BOL_CLIENT_ID')
@@ -21,7 +20,6 @@ TOKEN_URL = 'https://login.bol.com/token'
 
 # =================================================================
 # Globale configuratie
-# (Ongewijzigd)
 # =================================================================
 MAX_PAGINA = 1000
 PAGE_SIZE = 50
@@ -33,7 +31,6 @@ MAX_RETRY_ATTEMPTS = 3
 
 # =================================================================
 # Configuratie Google BigQuery
-# (Ongewijzigd)
 # =================================================================
 PROJECT_ID = 'advertentiedata-bol-ds'
 DATASET_ID = 'DATASET_BOL_ADVERTENTIES_DS'
@@ -48,7 +45,6 @@ token_verloopt_om = datetime.now()
 
 # =================================================================
 # Bol.com API authenticatie
-# (Functies ongewijzigd)
 # =================================================================
 def krijg_bol_toegangstoken():
     """Haalt het Bol.com authenticatie token op en slaat het op met vervaltijd."""
@@ -97,7 +93,6 @@ def check_en_vernieuwt_token():
 
 # =================================================================
 # Orders ophalen
-# (Functies ongewijzigd)
 # =================================================================
 def maak_api_call_met_retry(method, url, headers, params=None, data=None):
     """Maakt een API-aanroep en probeert het opnieuw bij een 429-fout."""
@@ -185,7 +180,6 @@ def krijg_alle_orders_van_dag(datum):
 
 # =================================================================
 # Orderdetails ophalen
-# (Functies ongewijzigd)
 # =================================================================
 def krijg_order_details(order_id):
     """Haalt de details van een specifieke order op via het order-ID endpoint."""
@@ -210,7 +204,6 @@ def krijg_order_details(order_id):
 
 # =================================================================
 # Push naar BigQuery in batches
-# (Functies ongewijzigd)
 # =================================================================
 def push_data_to_bigquery(df, project_id, dataset_id, table_id, service_account_info):
     """Pusht de pandas DataFrame naar een BigQuery tabel."""
@@ -233,7 +226,6 @@ def push_data_to_bigquery(df, project_id, dataset_id, table_id, service_account_
 
 # =================================================================
 # Hoofdverwerking
-# (Functies ongewijzigd)
 # =================================================================
 def verwerk_orders_per_dag(datum):
     """Verwerkt orders van een bepaalde dag en haalt de details op."""
@@ -280,7 +272,7 @@ def verwerk_orders_per_dag(datum):
 
 
 # =================================================================
-# Main script - AANGEPAST
+# Main script
 # =================================================================
 if __name__ == "__main__":
     start_tijd = time.time()
@@ -291,21 +283,15 @@ if __name__ == "__main__":
     if not bol_toegangstoken:
         print("[KRITIEKE FOUT] Kan niet verder. Bol.com authenticatie is mislukt.")
     else:
-        # **NIEUWE LOGICA: Definieer de datums die je wilt verwerken**
-        datums_te_verwerken = ['2025-11-03', '2025-11-04']
-        
-        for datum_string in datums_te_verwerken:
-            print(f"\n--- Verwerking gestart voor datum: {datum_string} ---")
-            
-            df_per_dag = verwerk_orders_per_dag(datum_string)
-            
-            if df_per_dag is not None:
-                push_data_to_bigquery(df_per_dag, PROJECT_ID, DATASET_ID, TABLE_ID, SERVICE_ACCOUNT_INFO)
-            
-            print(f"--- Verwerking voltooid voor datum: {datum_string} ---\n")
-            
-            # Voeg een pauze toe tussen de dagen om de API rate limits niet te snel te raken.
-            time.sleep(10) # 10 seconden is een veilige marge.
+        # Bepaal de datum van gisteren
+        datum_gisteren = datetime.now() - timedelta(days=1)
+        datum_string = datum_gisteren.strftime("%Y-%m-%d")
+
+        print(f"\n--- Verwerking gestart voor datum: {datum_string} ---")
+        df_per_dag = verwerk_orders_per_dag(datum_string)
+        if df_per_dag is not None:
+            push_data_to_bigquery(df_per_dag, PROJECT_ID, DATASET_ID, TABLE_ID, SERVICE_ACCOUNT_INFO)
+        print(f"--- Verwerking voltooid voor datum: {datum_string} ---\n")
 
     eind_tijd = time.time()
     totale_tijd_seconden = eind_tijd - start_tijd
@@ -313,6 +299,8 @@ if __name__ == "__main__":
     seconden = int(totale_tijd_seconden % 60)
 
     print("\n=================================================================")
-    print("                      Script voltooid")
+    print("                 Script voltooid")
     print(f"  Totaal duur: {minuten} minuut(en) en {seconden} seconde(n)")
     print("=================================================================")
+
+
